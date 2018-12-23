@@ -48,7 +48,7 @@ def scrape_mountains(scrape_fields: dict, mountains: list, save_path=None, sleep
 		mountains = [mountains]
 
 	base_url = "https://www.liftopia.com"
-	mountains = clean(list(mountains), replace_char="-")
+	mountains = sorted(clean(list(mountains), replace_char="-"))
 
 	as_of_date = get_as_of_date()
 	save_path = save_path or "{}_{}.csv".format(as_of_date, scrape_fields.get("suffix"))
@@ -65,10 +65,11 @@ def scrape_mountains(scrape_fields: dict, mountains: list, save_path=None, sleep
 		if write_header:
 			writer.writeheader()
 
-		for mountain in mountains:
+		num_mountains = len(mountains)
+		for idx, mountain in enumerate(mountains):
 			if mountain in visited:
 				continue
-			print(mountain)
+			print("\r{} / {}".format(idx, num_mountains), end="")
 
 			site = "{}/{}".format(base_url, mountain)
 			page = requests.get(site)
@@ -83,6 +84,7 @@ def scrape_mountains(scrape_fields: dict, mountains: list, save_path=None, sleep
 			writer.writerow(out)
 			visited.add(mountain)
 			sleep(max(0,sleep_seconds + random.random() - 0.5))
+	print()
 	return save_path
 
 def scrape_mountains_dynamic(mountains: str, save_path: str = None):
