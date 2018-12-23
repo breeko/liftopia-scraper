@@ -1,6 +1,5 @@
 # utils.py
 
-import bs4
 import re
 import datetime as dt
 import csv
@@ -9,22 +8,44 @@ import os
 DATE_FORMAT = "%Y-%m-%d"
 TIME_FORMAT = "%H:%M:%S"
 
-def get_from_elem(elem: bs4.element.Tag, tag: str, class_: str) -> str:
-	result = elem.find(tag, class_=class_)
-	if result:
-		return result.text.strip()
+def get_as_of_date():
+	now = dt.datetime.now()
+	return now.strftime("{}".format(DATE_FORMAT))
+	
+def get_as_of_date_time():
+	now = dt.datetime.now()
+	return now.strftime("{} {}".format(DATE_FORMAT, TIME_FORMAT))
+
+def get_from_elem(elem: object, tag: str, classes: list, delim=";") -> str:
+	""" 
+		Returns text of elements given a bs4 element, tag, and a list of classes
+	"""
+	if type(classes) is str:
+		classes = [classes]
+	results = []
+
+	for class_ in classes:
+		results += elem.find_all(tag, class_=class_)
+
+	if results:
+		result = "{} ".format(delim).join([r.text.strip() for r in results])
+		result.replace(",", " ")
+		return result
 	return ""
 
 def clean(strings: list, replace_char=" ") -> str:
 	if type(strings) is str:
 		strings = [strings]
+		originally_string = True
+	else:
+		originally_string = False
 	out = []
 	regex = re.compile(r'\W+')
 	for string in strings:
 		clean_string = regex.sub(replace_char, string)
 		out.append(clean_string)
 	
-	if len(out) == 1:
+	if originally_string:
 		return out[0]
 	return out
 

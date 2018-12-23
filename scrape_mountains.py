@@ -1,153 +1,92 @@
-# scrape_mountains.py
-
-from utils import *
+import csv
 import re
 import requests
 from bs4 import BeautifulSoup as bs
 import datetime as dt
 from time import sleep
+from collections import namedtuple
+import random
+import os
 
-headers_static = [
-	"as_of",
-	"mountain",
-	"base_elevation",	 
-	"peak_elevation",	
-	"vertical_drop",
-	"description",	
-	"beginner",	
-	"intermediate",
-	"advanced",	
-	"expert",
-	"amenities",	
-	"weekday_hours",
-	"weekend_hours",
-	"link"
-]
+from utils import *
 
-headers_dynamic = [
-	"as_of",
-	"mountain",
-	"trails_open",
-	"lifts_open",
-	"acres_open",
-	"avg_base_depth",
-	"24h_snow_fall",
-	"link"
-]
+Parse = namedtuple("Parse", "tag classes")
 
-def scrape_mountains_static(mountains: list, save_path=None, sleep_seconds=2.0):
+dynamic_fields = {
+    "suffix": "dynamic",
+    "fields":
+        {
+            "trails_open":                  Parse(tag="p", classes="resort-conditions__content resorts-show__resort-conditions__content--trails-open"),
+            "lifts_open":                   Parse(tag="p", classes="resort-conditions__content resorts-show__resort-conditions__content--lifts-open"),
+            "acres_open":                   Parse(tag="p", classes="resort-conditions__content resorts-show__resort-conditions__content--acreage" ),
+            "avg_base_depth":               Parse(tag="p", classes="resort-conditions__content resorts-show__resort-conditions__content--base-depth-average"),
+            "twenty_four_hour_snowfall":    Parse(tag="p", classes="resort-conditions__content resorts-show__resort-conditions__content--total-snowfall-24hr")
+		}
+}
+
+static_fields = {
+	"suffix": "static",
+	"fields":
+	{
+		"base_elevation":		Parse(tag="span", classes="resorts-show__about-section__stat--base"),
+		"peak_elevation":		Parse(tag="span", classes="resorts-show__about-section__stat--peak"),
+		"vertical_drop":		Parse(tag="span", classes="resorts-show__about-section__stat--drop"),
+		"description":			Parse(tag="span", classes=["content-revealer__text content-revealer__text--visible", "content-revealer__text content-revealer__text--hidden"]),
+		"beginner": 			Parse(tag="span", classes="trail-counts__trail-count-total trail-counts__trail-count-total--beginner"),
+		"intermediate": 		Parse(tag="span", classes="trail-counts__trail-count-total trail-counts__trail-count-total--intermediate"),
+		"advanced":				Parse(tag="span", classes="trail-counts__trail-count-total trail-counts__trail-count-total--advanced"),
+		"expert":				Parse(tag="span", classes="trail-counts__trail-count-total trail-counts__trail-count-total--expert"),
+		"weekday_hours":		Parse(tag="p", classes="resort-conditions__content resort-conditions__content--small resorts-show__resort-conditions__content--operations-weekday"),
+		"weekend_hours":		Parse(tag="p", classes="resort-conditions__content resort-conditions__content--small resorts-show__resort-conditions__content--operations-weekend"),
+		"amenities":			Parse(tag="div", classes="amenities__amenity--active amenities__amenity")
+	}
+}
+
+def scrape_mountains(scrape_fields: dict, mountains: list, save_path=None, sleep_seconds=1.0):
+	assert len(dynamic_fields.get("fields", [])) + len(dynamic_fields.get("joined", [])) > 0, "nothing to scrape"
+	if type(mountains) is str:
+		mountains = [mountains]
+
 	base_url = "https://www.liftopia.com"
 	mountains = clean(list(mountains), replace_char="-")
 
-	now = dt.datetime.now()
-	as_of_date_time = now.strftime(f"{DATE_FORMAT} {TIME_FORMAT}")
-	save_path = save_path or "mountains.csv"
-
+	as_of_date = get_as_of_date()
+	save_path = save_path or "{}_{}.csv".format(as_of_date, scrape_fields.get("suffix"))
+	
 	visited = get_visited(save_path, lambda l: l.get("mountain"))
+	write_header = not os.path.exists(save_path)
 
-	f = open(save_path, "a") if os.path.exists(save_path) else open(save_path, "a")
-	writer = csv.DictWriter(f, fieldnames=headers_static)
-	writer.writeheader()
+	with open(save_path, "a") as f: # if os.path.exists(save_path) else open(save_path, "a")
 
-	for mountain in mountains:
-		if mountain in visited:
-			continue
-		print(mountain)
-
-		site = f"{base_url}/{mountain}"
-		page = requests.get(site)
-		soup = bs(page.content, "html.parser")
-
-
-		amenities = soup.find_all("div", class_="amenities__amenity--active amenities__amenity")
-		amenities = "; ".join([a.text for a in amenities])
+		fields = scrape_fields.get("fields")
 		
-		base_elevation		 = get_from_elem(soup, "span", class_="resorts-show__about-section__stat--base" )
-		peak_elevation		 = get_from_elem(soup, "span", class_="resorts-show__about-section__stat--peak")
-		vertical_drop		 = get_from_elem(soup, "span", class_="resorts-show__about-section__stat--drop" )
-		description_hidden	 = get_from_elem(soup, "span", class_="content-revealer__text content-revealer__text--visible")		
-		description_visible  = get_from_elem(soup, "span", class_="content-revealer__text content-revealer__text--hidden")
-		beginner			 = get_from_elem(soup, "span", class_="trail-counts__trail-count-total trail-counts__trail-count-total--beginner")
-		intermediate		 = get_from_elem(soup, "span", class_="trail-counts__trail-count-total trail-counts__trail-count-total--intermediate")
-		advanced		 	 = get_from_elem(soup, "span", class_="trail-counts__trail-count-total trail-counts__trail-count-total--advanced")
-		expert		 		 = get_from_elem(soup, "span", class_="trail-counts__trail-count-total trail-counts__trail-count-total--expert")
-		weekday_hours		 = get_from_elem(soup, "p", class_="resort-conditions__content resort-conditions__content--small resorts-show__resort-conditions__content--operations-weekday")
-		weekend_hours		 = get_from_elem(soup, "p", class_="resort-conditions__content resort-conditions__content--small resorts-show__resort-conditions__content--operations-weekend")
+		headers = list(fields.keys()) + ["as_of", "mountain", "link"]
+		writer = csv.DictWriter(f, fieldnames=headers)
+		if write_header:
+			writer.writeheader()
 
-		amenities = amenities.replace(',', " ")
-		
-		description = description_visible + description_hidden
-		description = description.replace(',', " ")
+		for mountain in mountains:
+			if mountain in visited:
+				continue
+			print(mountain)
 
-		out = {
-			"as_of": as_of_date_time,
-			"mountain": mountain,
-			"base_elevation": base_elevation,
-			"peak_elevation": peak_elevation,
-			"vertical_drop": vertical_drop,
-			"description": description,
-			"beginner": beginner,
-			"intermediate": intermediate,
-			"advanced": advanced,
-			"expert": expert,
-			"amenities": amenities,
-			"weekday_hours": weekday_hours,
-			"weekend_hours": weekend_hours,
-			"link": site
-		}
+			site = "{}/{}".format(base_url, mountain)
+			page = requests.get(site)
 
-		writer.writerow(out)
-		visited.add(mountain)
-		sleep(sleep_seconds)
+			as_of_date_time = get_as_of_date_time()
+
+			soup = bs(page.content, "html.parser")
+			out = {"as_of": as_of_date_time, "mountain": mountain, "link": site}
+			for field, parse in fields.items():
+				out[field] = get_from_elem(elem=soup, tag=parse.tag, classes=parse.classes)
+
+			writer.writerow(out)
+			visited.add(mountain)
+			sleep(max(0,sleep_seconds + random.random() - 0.5))
 	return save_path
 
-def scrape_mountains_dynamic(mountains: list, save_path=None, sleep_seconds=2.0):
-	base_url = "https://www.liftopia.com"
-	mountains = clean(list(mountains), replace_char="-")
+def scrape_mountains_dynamic(mountains: str, save_path: str = None):
+	return scrape_mountains(scrape_fields=dynamic_fields, mountains=mountains,save_path=save_path)
 
-	now = dt.datetime.now()
-	as_of_date_time = now.strftime(f"{DATE_FORMAT} {TIME_FORMAT}")
-	as_of_date = now.strftime(f"{DATE_FORMAT}")
-	save_path = save_path or f"{as_of_date}-mountains.csv"
-
-	visited = get_visited(save_path, lambda l: f"{l.get('date')} {l.get('mountain')}")
-
-	f = open(save_path, "a") if os.path.exists(save_path) else open(save_path, "a")
-	writer = csv.DictWriter(f, fieldnames=headers_dynamic)
-	writer.writeheader()
-
-	for mountain in mountains:
-		if mountain in visited:
-			continue
-		print(mountain)
-		
-		site = f"{base_url}/{mountain}"
-		page = requests.get(site)
-		soup = bs(page.content, "html.parser")
-
-		trails_open		 			= get_from_elem(soup, "p", class_="resort-conditions__content resorts-show__resort-conditions__content--trails-open")
-		lifts_open		 			= get_from_elem(soup, "p", class_="resort-conditions__content resorts-show__resort-conditions__content--lifts-open")
-		acres_open		 			= get_from_elem(soup, "p", class_="resort-conditions__content resorts-show__resort-conditions__content--acreage" )
-		avg_base_depth	 			= get_from_elem(soup, "p", class_="resort-conditions__content resorts-show__resort-conditions__content--base-depth-average")
-		twenty_four_hour_snowfall   = get_from_elem(soup, "p", class_="resort-conditions__content resorts-show__resort-conditions__content--total-snowfall-24hr")
-
-		out = {
-			"as_of": as_of_date_time,
-			"mountain": mountain,
-			"trails_open": trails_open,
-			"lifts_open": lifts_open,
-			"acres_open": acres_open,
-			"avg_base_depth": avg_base_depth,
-			"24h_snow_fall": twenty_four_hour_snowfall,
-			"link": site
-		}
-
-		writer.writerow(out)
-		visited.add(mountain)
-		sleep(sleep_seconds)
-	return save_path
-
-mountains = get_visited("out.csv", lambda l: l.get("mountain").lower())
-# scrape_mountains_static(mountains=mountains)
-
-scrape_mountains_dynamic(mountains=mountains)
+def scrape_mountains_static(mountains: str, save_path: str = None):
+	return scrape_mountains(scrape_fields=static_fields,mountains=mountains,save_path=save_path)
